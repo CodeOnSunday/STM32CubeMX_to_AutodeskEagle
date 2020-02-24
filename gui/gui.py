@@ -20,7 +20,7 @@ class ConditionalWizard(QWizard):
     def onPageChanged(self, page_idx):
         if self.__callback is not None:
             if self.__last_idx < page_idx:  # changed to the next page
-                if self.__callback(page_idx) is False:
+                if self.__callback(self.__last_idx) is False:
                     self.back()
                     return
         self.__last_idx = page_idx
@@ -34,9 +34,19 @@ class ConditionalWizard(QWizard):
     def registerCallback(self, callback):
         self.__callback = callback
 
+class ConfigEntry:
+    def __init__(self, source_rsw_idx, sink_rsw_idx, target_rsw_idx, source_input, sink_input, target_input):
+        self.source_rsw_idx = source_rsw_idx
+        self.sink_rsw_idx = sink_rsw_idx
+        self.target_rsw_idx = target_rsw_idx
+        self.source_input = source_input
+        self.sink_input = sink_input
+        self.target_input = target_input
+
 class MainWindow:
     def __init__(self):
         self.__dataModel = None
+        self.__operation_result = None
 
     def buildGui(self):
         ui_file_loader = QUiLoader()
@@ -92,11 +102,35 @@ class MainWindow:
         self.__error_tableView = fc(QTableView, "error_tableView")
         self.__error_tableView.setModel(self.__error_model)
 
-        # DEBUG
-        fc_l("source_stm_lineEdit").setText("C:/_Daten/sonntag_env/workspace/EaglePartUpdater/cube.csv")
-        fc_l("sink_eagle_sch_lineEdit").setText("C:/_Daten/sonntag_env/Schaltung_und_Layout/MAS_3/MAS3DZ/MAS3DZ_MoBo/v3/MAS3_DZ_v31.sch")
-        fc_l("sink_eagle_brd_lineEdit").setText("C:/_Daten/sonntag_env/Schaltung_und_Layout/MAS_3/MAS3DZ/MAS3DZ_MoBo/v3/MAS3_DZ_v31.brd")
-        fc_l("sink_eagle_ic_lineEdit").setText("IC1")
+        # page 2
+
+        self.__target_rsw = fc(ResizeStackWidget,"target_stackedWidget")
+
+        self.__datatarget_stm = STM32CubeMX_DataTarget(self._window, fc_p("target_stm") )
+        self.__datatarget_eagle = AutodeskEagle_DataTarget(self._window, fc_p("target_eagle_sch"), fc_p("target_eagle_brd") )
+
+
+        self.config_by_idx = {
+        # operation idx
+            # stm => eagle
+            0: ConfigEntry(
+                source_rsw_idx = 0,
+                sink_rsw_idx = 1,
+                target_rsw_idx = 1,
+                source_input = self.__datasource_stm,
+                sink_input = self.__datasink_eagle,
+                target_input = self.__datatarget_eagle
+            ),
+            # eagle => stm
+            1: ConfigEntry(
+                source_rsw_idx = 1,
+                sink_rsw_idx = 0,
+                target_rsw_idx = 0,
+                source_input = self.__datasource_eagle,
+                sink_input = self.__datasink_stm,
+                target_input = self.__datatarget_stm
+            )            
+        }
 
     def show(self):
         self._window.show()
@@ -104,34 +138,35 @@ class MainWindow:
     @Slot()
     def onOperationSelect(self, idx):
         # clean settings and entries
-        for dm in [self.__datasource_stm, self.__datasource_eagle, self.__datasink_stm, self.__datasink_eagle]:
+        for dm in [self.__datasource_stm, self.__datasource_eagle, self.__datasink_stm, self.__datasink_eagle, self.__datatarget_stm, self.__datatarget_eagle]:
             dm.clear()
 
-        config_idx = {
-        # idx: [source, sink]
-            0: [0, 1],
-            1: [1, 0]
-        }
+        config = self.config_by_idx[idx]
 
-        self.__source_rsw.setCurrentIndex(config_idx[idx][0])
-        self.__sink_rsw.setCurrentIndex(config_idx[idx][1])
+        self.__source_rsw.setCurrentIndex(  config.source_rsw_idx )
+        self.__sink_rsw.setCurrentIndex(    config.sink_rsw_idx   )
+        self.__target_rsw.setCurrentIndex(  config.target_rsw_idx )
 
     def onPageChanged(self, page_idx):
-        if page_idx == 1:
+        if page_idx == -1:
+            return self.onWriteFiles()
+        if page_idx == 0:
             return self.onDataSelected()
+        if page_idx == 1:
+            return True
         return False
 
     def onDataSelected(self):
-        config_idx = {
-            0: [self.__datasource_stm, self.__datasink_eagle],
-            1: [self.__datasource_eagle, self.__datasink_stm]
-        }
+        config = self.config_by_idx[self.__operation_cb.currentIndex()]
         
-        source  = config_idx[self.__operation_cb.currentIndex()][0]
-        sink    = config_idx[self.__operation_cb.currentIndex()][1]
+        source  = config.source_input
+        sink    = config.sink_input
+        target  = config.target_input
 
         source.load()
         sink.load()
+
+        target.copyInputFrom(sink)
 
         if source.isLoaded() == False or sink.isLoaded() == False:
             return False
@@ -140,17 +175,20 @@ class MainWindow:
         sink_model = sink.getModel()
 
         tnn = TargetNetContainer.fromNNC(sink_model, source_model)
-
         self.__operation_result = sink.apply(tnn)
         
         # display log
         self.__changelog_model.clear()
-        self.__changelog_model.setHorizontalHeaderLabels(["From", "To"])
-        for line in self.__operation_result.log:
-            self.__changelog_model.appendRow([QStandardItem(line[0]), QStandardItem(line[1])])
+        self.__changelog_model.setHorizontalHeaderLabels(["Pin", "From", "To"])
+        for entry in self.__operation_result.log:
+            self.__changelog_model.appendRow(
+                [
+                    QStandardItem(str(entry.name)), 
+                    QStandardItem(str(entry.net)),
+                    QStandardItem(str(entry.new_net))
+                ]
+            )
         
-        print("Errors: {} Warnings: {}".format(self.__operation_result.errors, self.__operation_result.warnings))
-
         # display errors
         self.__error_model.clear()
         self.__error_model.setHorizontalHeaderLabels(["Type", "Message"])        
@@ -163,6 +201,14 @@ class MainWindow:
         self.__error_tableView.resizeColumnsToContents()
 
         return True
+
+    def onWriteFiles(self):
+        if self.__operation_result is None:
+            return False
+
+        config = self.config_by_idx[self.__operation_cb.currentIndex()]
+
+        config.target_input.write(self.__operation_result)
 
 def Run(argv, widget):
     app = QApplication(argv)

@@ -44,6 +44,13 @@ def generateOFD(master, title, filter):
             manager.setValue(path)
     return f
 
+def generateSFD(master, title, filter):
+    def f(manager):
+        path, _ = QFileDialog.getSaveFileName(master, title, manager.getValue(), filter)
+        if len(path) > 0:
+            manager.setValue(path)
+    return f
+
 def generateNotImplemented():
     def f(_):
         raise NotImplementedError()
@@ -62,12 +69,28 @@ class DataManager:
     def clear(self):
         raise NotImplementedError()
 
+    def getInput(self):
+        raise NotImplementedError()
+
 class DataSource(DataManager):
     def getModel(self):
         raise NotImplementedError()
 
 class DataSink(DataManager):
     def getTargetModel(self, data_model):
+        raise NotImplementedError()
+
+    def apply(self, *args, **argc):
+        raise NotImplementedError()
+
+class DataTarget:
+    def write(self, content):
+        raise NotImplementedError()
+
+    def clear(self):
+        raise NotImplementedError()
+
+    def copyInputFrom(self, other):
         raise NotImplementedError()
 
 class STM32CubeMX_DataSource(DataSource):
@@ -125,6 +148,9 @@ class STM32CubeMX_DataSource(DataSource):
             QMessageBox.critical(self.__window, "File format unknown", "The file \"{}\" seams not to be a valid STM32CubeMX file.".format(self.__source.getValue()))
             return
 
+    def getInput(self):
+        return self.__source.getValue()
+
 class STM32CubeMX_DataSink(DataSink):
     def __init__(self, window, sink):
         self.__source = LineEditWithButton(
@@ -175,10 +201,19 @@ class STM32CubeMX_DataSink(DataSink):
             return
 
         try:
-            return KNOWN_FILE_EXT_LOADER[self.__file_ext].getModel(self.__file_content, self.__ic.getValue())
+            return KNOWN_FILE_EXT_LOADER[self.__file_ext].getModel(self.__file_content)
         except FileFormatUnknown:
             QMessageBox.critical(self.__window, "File format unknown", "The file \"{}\" seams not to be a valid STM32CubeMX file.".format(self.__source.getValue()))
             return
+
+    def getInput(self):
+        return self.__source.getValue()
+
+    def apply(self, target_net_container):
+        if not self.isLoaded():
+            return
+
+        return KNOWN_FILE_EXT_LOADER[self.__file_ext].applyOperation(self.__file_content, target_net_container)
 
 class AutodeskEagle_DataSource(DataSource):
     def __init__(self, window, schematic, ic):
@@ -256,6 +291,9 @@ class AutodeskEagle_DataSource(DataSource):
         except FileFormatUnknown:
             QMessageBox.critical(self.__window, "File format unknown", "The file \"{}\" seams not to be a valid Autodesk Eagle schematic.".format(self.__schematic.getValue()))
             return
+
+    def getInput(self):
+        return self.__schematic.getValue(), self.__ic.getValue()
 
 class AutodeskEagle_DataSink(DataSink):
     def __init__(self, window, schematic, board, ic):
@@ -364,10 +402,65 @@ class AutodeskEagle_DataSink(DataSink):
 
         return KNOWN_FILE_EXT_LOADER[self.__schematic_ext].applyOperation(self.__schematic_content, self.__board_content, self.__ic.getValue(), target_net_container)
 
-        # TODO:
-        # try:
-        #     return KNOWN_FILE_EXT_LOADER[self.__schematic_ext].applyOperation(self.__schematic_content, self.__board_content, self.__ic.getValue(), target_net_container)
-        # except FileFormatUnknown:
-        #     QMessageBox.critical(self.__window, "File format unknown", "The file \"{}\" seams not to be a valid Autodesk Eagle schematic.".format(self.__schematic.getValue()))
-        #     return
-    
+    def getInput(self):
+        return self.__schematic.getValue(), self.__board.getValue(), self.__ic.getValue()
+
+class STM32CubeMX_DataTarget(DataTarget):
+    def __init__(self, window, target):
+        self.__target = LineEditWithButton(
+            target[0], 
+            target[1], 
+            generateSFD(
+                window, 
+                "Select data target", 
+                "STM32CubeMX (*.ioc *.csv)"
+            )
+        )
+        self.__window = window
+
+    def clear(self):
+        self.__target.setValue("")
+
+    def copyInputFrom(self, other):
+        self.__target.setValue(other.getInput())
+
+    def write(self, operation_result):
+        with open(self.__target.getValue(), "w") as f:
+            f.write(operation_result.content)
+
+class AutodeskEagle_DataTarget(DataTarget):
+    def __init__(self, window, target_schematic, target_board):
+        self.__schematic = LineEditWithButton(
+            target_schematic[0], 
+            target_schematic[1], 
+            generateOFD(
+                window, 
+                "Select target schematic", 
+                "Autodesk Eagle (*.sch)"
+            )
+        )
+        self.__board = LineEditWithButton(
+            target_board[0], 
+            target_board[1], 
+            generateOFD(
+                window, 
+                "Select target board", 
+                "Autodesk Eagle (*.brd)"
+            )
+        )
+        self.__window = window
+
+    def clear(self):
+        self.__schematic.setValue("")
+        self.__board.setValue("")
+
+    def copyInputFrom(self, other):
+        s,b,_ = other.getInput()
+        self.__schematic.setValue(s)
+        self.__board.setValue(b)
+
+    def write(self, operation_result):
+        with open(self.__schematic.getValue(), "w") as f:
+            f.write(operation_result.content["sch"])
+        with open(self.__board.getValue(), "w") as f:
+            f.write(operation_result.content["brd"])
