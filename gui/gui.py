@@ -132,6 +132,9 @@ class MainWindow:
             )            
         }
 
+        self.__operation_cb.setCurrentIndex(0)
+        self.onOperationSelect(0)
+
     def show(self):
         self._window.show()
 

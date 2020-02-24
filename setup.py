@@ -8,7 +8,11 @@ setup(  name = "STM32CubeMX to Eagle",
             "build_exe": {
                 "packages": ["os"],
                 "excludes": ["tkinter"],
-                "include_files": ["wizard.ui"]
+                "include_files": [
+                    (r"ui\main_wizard.ui", r"ui\main_wizard.ui"),
+                    (r"ui\select_ic.ui", r"ui\select_ic.ui"),
+                    (r"settings\alternative_pin_names.csv", r"settings\alternative_pin_names.csv")
+                ]
             }
         },
         executables = [
